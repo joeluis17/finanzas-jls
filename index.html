@@ -175,9 +175,41 @@
   .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); }
   .empty-state .emoji { font-size: 36px; margin-bottom: 12px; }
   .empty-state p { font-size: 14px; }
+  /* LOGIN SCREEN */
+  #login-screen { display:none; position:fixed; inset:0; background:var(--bg); z-index:999; align-items:center; justify-content:center; flex-direction:column; }
+  #login-screen.visible { display:flex; }
+  .login-card { background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:48px 40px; text-align:center; max-width:400px; width:100%; margin:16px; }
+  .login-logo { font-size:40px; margin-bottom:16px; }
+  .login-title { font-size:24px; font-weight:800; color:var(--text); margin-bottom:6px; }
+  .login-sub { font-size:14px; color:var(--muted); margin-bottom:32px; line-height:1.5; }
+  .btn-google { display:inline-flex; align-items:center; gap:12px; background:#fff; color:#1a1a2e; border:none; border-radius:10px; padding:13px 24px; font-size:14px; font-weight:600; cursor:pointer; transition:all .2s; width:100%; justify-content:center; }
+  .btn-google:hover { background:#f0f0f0; transform:translateY(-1px); box-shadow:0 4px 20px rgba(0,0,0,.3); }
+  .btn-google img { width:20px; height:20px; }
+  .login-denied { background:rgba(255,92,106,.1); border:1px solid rgba(255,92,106,.3); border-radius:10px; padding:14px; margin-top:16px; font-size:13px; color:var(--red); display:none; }
+  #app-wrapper { display:none; }
+  #app-wrapper.visible { display:block; }
 </style>
 </head>
 <body>
+
+<!-- ======================== LOGIN ======================== -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">💳</div>
+    <div class="login-title">JLS Finanzas</div>
+    <div class="login-sub">Tu panel personal de finanzas.<br>Ingresá con tu cuenta de Google para continuar.</div>
+    <button class="btn-google" onclick="loginWithGoogle()">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+      Ingresar con Google
+    </button>
+    <div class="login-denied" id="login-denied">
+      ⛔ Acceso denegado. Esta app es de uso privado.
+    </div>
+  </div>
+</div>
+
+<!-- ======================== APP ======================== -->
+<div id="app-wrapper">
 
 <nav>
   <div class="nav-inner">
@@ -193,6 +225,10 @@
     <div id="drive-status" style="margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 8px;flex-shrink:0">
       <div id="drive-dot" style="width:8px;height:8px;border-radius:50%;background:var(--muted)"></div>
       <span id="drive-label" style="font-size:12px;color:var(--muted);white-space:nowrap">Drive</span>
+    </div>
+    <div id="user-info" style="display:flex;align-items:center;gap:8px;padding:0 8px;flex-shrink:0;border-left:1px solid var(--border);margin-left:4px">
+      <img id="user-avatar" src="" style="width:28px;height:28px;border-radius:50%;display:none">
+      <button onclick="logout()" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 8px;border-radius:6px" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='none'">Salir</button>
     </div>
   </div>
 </nav>
@@ -1873,10 +1909,101 @@ async function driveInit() {
 }
 
 // ============================================================
+// AUTH — Google Login
+// ============================================================
+const ALLOWED_EMAIL = 'sanchezjoseluis@gmail.com';
+let googleUser = null;
+
+function loginWithGoogle() {
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: GDRIVE_CLIENT_ID,
+    scope: 'email profile ' + GDRIVE_SCOPES,
+    callback: async (resp) => {
+      if (resp.error) { showLoginDenied('Error al autenticar con Google'); return; }
+      // Get user info
+      try {
+        const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${resp.access_token}` }
+        });
+        const userInfo = await userRes.json();
+        if (userInfo.email !== ALLOWED_EMAIL) {
+          showLoginDenied('⛔ Acceso denegado. Esta app es de uso privado.');
+          return;
+        }
+        // Authorized
+        googleUser = userInfo;
+        driveToken = resp.access_token;
+        localStorage.setItem('jls_drive_token', driveToken);
+        localStorage.setItem('jls_auth_email', userInfo.email);
+        localStorage.setItem('jls_auth_name', userInfo.name);
+        localStorage.setItem('jls_auth_picture', userInfo.picture || '');
+        enterApp(userInfo);
+        // Init drive
+        await driveLoadOrCreate();
+      } catch(e) {
+        showLoginDenied('Error al verificar identidad');
+      }
+    }
+  });
+  client.requestAccessToken();
+}
+
+function showLoginDenied(msg) {
+  const el = document.getElementById('login-denied');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function enterApp(userInfo) {
+  document.getElementById('login-screen').classList.remove('visible');
+  document.getElementById('app-wrapper').classList.add('visible');
+  // Show avatar
+  const avatar = document.getElementById('user-avatar');
+  if (userInfo.picture) { avatar.src = userInfo.picture; avatar.style.display = 'block'; }
+  renderDashboard();
+}
+
+function logout() {
+  if (!confirm('¿Cerrar sesión?')) return;
+  localStorage.removeItem('jls_auth_email');
+  localStorage.removeItem('jls_auth_name');
+  localStorage.removeItem('jls_auth_picture');
+  localStorage.removeItem('jls_drive_token');
+  localStorage.removeItem('jls_drive_file_id');
+  driveToken = null; driveFileId = null; googleUser = null;
+  document.getElementById('app-wrapper').classList.remove('visible');
+  document.getElementById('login-screen').classList.add('visible');
+  document.getElementById('login-denied').style.display = 'none';
+  driveSetStatus('disconnected', 'Drive');
+}
+
+// ============================================================
 // INIT
 // ============================================================
-renderDashboard();
-driveInit();
+// Check if already logged in from previous session
+(function() {
+  const savedEmail = localStorage.getItem('jls_auth_email');
+  const savedToken = localStorage.getItem('jls_drive_token');
+  const savedFileId = localStorage.getItem('jls_drive_file_id');
+
+  if (savedEmail === ALLOWED_EMAIL && savedToken) {
+    // Restore session
+    driveToken = savedToken;
+    driveFileId = savedFileId;
+    const userInfo = {
+      email: savedEmail,
+      name: localStorage.getItem('jls_auth_name') || '',
+      picture: localStorage.getItem('jls_auth_picture') || ''
+    };
+    enterApp(userInfo);
+    driveInit();
+  } else {
+    // Show login
+    document.getElementById('login-screen').classList.add('visible');
+  }
+})();
 </script>
+
+</div><!-- end app-wrapper -->
 </body>
 </html>
