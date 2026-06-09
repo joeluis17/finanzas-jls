@@ -6,6 +6,7 @@
 <title>Finanzas · JLS</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -189,6 +190,10 @@
     <button class="nav-btn" onclick="showPage('presupuesto')">Presupuesto</button>
     <button class="nav-btn" onclick="showPage('comparativa')">Comparativa</button>
     <button class="nav-btn" onclick="showPage('config')">⚙️</button>
+    <div id="drive-status" style="margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 8px;flex-shrink:0">
+      <div id="drive-dot" style="width:8px;height:8px;border-radius:50%;background:var(--muted)"></div>
+      <span id="drive-label" style="font-size:12px;color:var(--muted);white-space:nowrap">Drive</span>
+    </div>
   </div>
 </nav>
 
@@ -428,8 +433,19 @@
 <!-- ======================== CONFIG ======================== -->
 <div class="page" id="page-config">
   <div class="section-title">Configuración</div>
+
+  <!-- GOOGLE DRIVE -->
   <div class="card mb-2">
-    <div class="card-title">API Key de Claude (para categorización con IA)</div>
+    <div class="card-title">Google Drive — Sincronización automática</div>
+    <div class="text-muted mt-1 mb-2" style="font-size:13px">Tus datos se guardan en un archivo <b>finanzas_jls.json</b> en tu Drive. Accesible desde cualquier dispositivo.</div>
+    <div id="drive-config-status" class="mb-2"></div>
+    <div class="flex gap-2" style="flex-wrap:wrap">
+      <button class="btn btn-primary" id="btn-drive-connect" onclick="driveConnect()">🔗 Conectar con Google Drive</button>
+      <button class="btn btn-secondary" id="btn-drive-sync" onclick="driveSyncNow()" style="display:none">☁️ Sincronizar ahora</button>
+      <button class="btn btn-danger btn-sm" id="btn-drive-disconnect" onclick="driveDisconnect()" style="display:none">Desconectar</button>
+    </div>
+    <div id="drive-last-sync" class="card-sub mt-2"></div>
+  </div>
     <div class="text-muted mt-1 mb-2">Tu API key se guarda solo en este navegador, nunca se envía a ningún servidor externo.</div>
     <div class="flex gap-2">
       <input class="input" type="password" id="apikey-input" placeholder="sk-ant-..." style="flex:1">
@@ -552,6 +568,7 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem('jls_finanzas_v3', JSON.stringify(state));
+  driveAutoSave();
 }
 
 // ============================================================
@@ -1588,6 +1605,9 @@ function renderConfig() {
   document.getElementById('apikey-status').textContent = key ? '✅ API key configurada' : '❌ Sin API key';
   document.getElementById('tc-input').value = state.tipoCambio || 1420;
   document.getElementById('tc-actual').textContent = 'Actual: $' + (state.tipoCambio||1420).toLocaleString();
+  driveUpdateConfigUI();
+  if (driveToken && driveFileId) driveSetStatus('connected', '☁️ Conectado');
+  else driveSetStatus('disconnected', 'Drive');
 }
 
 function saveApiKey() {
@@ -1652,9 +1672,207 @@ function toast(msg) {
 }
 
 // ============================================================
+// GOOGLE DRIVE SYNC
+// ============================================================
+const GDRIVE_CLIENT_ID = '290497122873-ca3dcgsfgakc2ji12k9sga7i1348u0d2.apps.googleusercontent.com';
+const GDRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file';
+const GDRIVE_FILENAME = 'finanzas_jls.json';
+
+let driveToken = null;
+let driveFileId = null;
+let driveSaveTimer = null;
+
+function driveSetStatus(state, msg) {
+  const dot = document.getElementById('drive-dot');
+  const label = document.getElementById('drive-label');
+  const cfgStatus = document.getElementById('drive-config-status');
+  const colors = { connected: '#2ecc87', syncing: '#f7c948', error: '#ff5c6a', disconnected: '#7a85a3' };
+  if (dot) { dot.style.background = colors[state] || colors.disconnected; }
+  if (label) label.textContent = msg;
+  if (cfgStatus) cfgStatus.innerHTML = `<span style="color:${colors[state]};font-size:13px;font-weight:600">${msg}</span>`;
+}
+
+function driveConnect() {
+  driveSetStatus('syncing', 'Conectando...');
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: GDRIVE_CLIENT_ID,
+    scope: GDRIVE_SCOPES,
+    callback: async (resp) => {
+      if (resp.error) { driveSetStatus('error', 'Error al conectar'); toast('❌ Error de autenticación con Google'); return; }
+      driveToken = resp.access_token;
+      localStorage.setItem('jls_drive_token', driveToken);
+      driveSetStatus('syncing', 'Buscando archivo...');
+      await driveLoadOrCreate();
+    }
+  });
+  client.requestAccessToken();
+}
+
+async function driveLoadOrCreate() {
+  try {
+    // Search for existing file in appDataFolder first, then Drive root
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${GDRIVE_FILENAME}'&spaces=drive&fields=files(id,name,modifiedTime)`,
+      { headers: { Authorization: `Bearer ${driveToken}` } }
+    );
+    const searchData = await searchRes.json();
+
+    if (searchData.files && searchData.files.length > 0) {
+      driveFileId = searchData.files[0].id;
+      localStorage.setItem('jls_drive_file_id', driveFileId);
+      // Load remote data
+      driveSetStatus('syncing', 'Cargando datos...');
+      await driveLoadData();
+    } else {
+      // Create new file
+      driveSetStatus('syncing', 'Creando archivo...');
+      await driveCreateFile();
+    }
+    driveUpdateConfigUI();
+  } catch(e) {
+    driveSetStatus('error', 'Error de conexión');
+    toast('❌ Error al conectar con Drive: ' + e.message);
+  }
+}
+
+async function driveLoadData() {
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
+      { headers: { Authorization: `Bearer ${driveToken}` } }
+    );
+    if (!res.ok) throw new Error('No se pudo leer el archivo');
+    const remoteState = await res.json();
+
+    // Merge: remote wins if it has more transactions
+    const localCount = state.transactions.length;
+    const remoteCount = (remoteState.transactions||[]).length;
+
+    if (remoteCount > localCount) {
+      state = remoteState;
+      saveState();
+      renderDashboard();
+      toast('☁️ Datos cargados desde Drive');
+    } else if (localCount > remoteCount) {
+      // Local is newer, push to Drive
+      await driveSaveData();
+      toast('☁️ Datos locales subidos a Drive');
+    }
+
+    driveSetStatus('connected', '☁️ Conectado');
+    updateLastSync();
+  } catch(e) {
+    driveSetStatus('error', 'Error al leer');
+    toast('❌ Error al leer desde Drive');
+  }
+}
+
+async function driveCreateFile() {
+  try {
+    const meta = { name: GDRIVE_FILENAME, mimeType: 'application/json' };
+    const metaRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta)
+    });
+    const metaData = await metaRes.json();
+    driveFileId = metaData.id;
+    localStorage.setItem('jls_drive_file_id', driveFileId);
+    await driveSaveData();
+    driveSetStatus('connected', '☁️ Conectado');
+    toast('☁️ Archivo creado en Google Drive');
+    updateLastSync();
+  } catch(e) {
+    driveSetStatus('error', 'Error al crear');
+    toast('❌ Error al crear archivo en Drive');
+  }
+}
+
+async function driveSaveData() {
+  if (!driveToken || !driveFileId) return;
+  try {
+    const content = JSON.stringify(state);
+    await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+      body: content
+    });
+    updateLastSync();
+  } catch(e) {
+    driveSetStatus('error', 'Error al guardar');
+  }
+}
+
+function driveSyncNow() {
+  if (!driveToken) { toast('Primero conectá con Google Drive'); return; }
+  driveSetStatus('syncing', 'Guardando...');
+  driveSaveData().then(() => {
+    driveSetStatus('connected', '☁️ Conectado');
+    toast('☁️ Sincronizado con Drive');
+  });
+}
+
+function driveDisconnect() {
+  if (!confirm('¿Desconectar Drive? Los datos locales se mantienen.')) return;
+  driveToken = null; driveFileId = null;
+  localStorage.removeItem('jls_drive_token');
+  localStorage.removeItem('jls_drive_file_id');
+  driveSetStatus('disconnected', 'Drive');
+  driveUpdateConfigUI();
+  toast('Drive desconectado');
+}
+
+function driveAutoSave() {
+  if (!driveToken || !driveFileId) return;
+  clearTimeout(driveSaveTimer);
+  driveSaveTimer = setTimeout(async () => {
+    driveSetStatus('syncing', 'Guardando...');
+    await driveSaveData();
+    driveSetStatus('connected', '☁️ Conectado');
+  }, 2000); // 2 second debounce after last change
+}
+
+function updateLastSync() {
+  const el = document.getElementById('drive-last-sync');
+  if (el) {
+    const now = new Date();
+    el.textContent = `Última sincronización: ${now.toLocaleTimeString('es-AR')} · ${now.toLocaleDateString('es-AR')}`;
+  }
+}
+
+function driveUpdateConfigUI() {
+  const connected = !!(driveToken && driveFileId);
+  const btnConnect = document.getElementById('btn-drive-connect');
+  const btnSync = document.getElementById('btn-drive-sync');
+  const btnDisconnect = document.getElementById('btn-drive-disconnect');
+  if (btnConnect) btnConnect.style.display = connected ? 'none' : 'inline-flex';
+  if (btnSync) btnSync.style.display = connected ? 'inline-flex' : 'none';
+  if (btnDisconnect) btnDisconnect.style.display = connected ? 'inline-flex' : 'none';
+}
+
+async function driveInit() {
+  const savedToken = localStorage.getItem('jls_drive_token');
+  const savedFileId = localStorage.getItem('jls_drive_file_id');
+  if (savedToken && savedFileId) {
+    driveToken = savedToken;
+    driveFileId = savedFileId;
+    driveSetStatus('syncing', 'Reconectando...');
+    try {
+      await driveLoadData();
+      driveSetStatus('connected', '☁️ Conectado');
+    } catch(e) {
+      // Token expired — need to reconnect
+      driveToken = null; driveFileId = null;
+      driveSetStatus('disconnected', 'Reconectar Drive');
+    }
+  }
+}
+
+// ============================================================
 // INIT
 // ============================================================
 renderDashboard();
+driveInit();
 </script>
 </body>
 </html>
