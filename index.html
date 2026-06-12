@@ -398,7 +398,7 @@
   <div class="card mt-3">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Concepto</th><th>Tipo</th><th class="text-right">Pesos</th><th class="text-right">USD</th></tr></thead>
+        <thead><tr><th>Concepto</th><th>Tipo</th><th class="text-right">Pesos</th><th class="text-right">USD</th><th></th></tr></thead>
         <tbody id="ingresos-body"></tbody>
       </table>
     </div>
@@ -1392,6 +1392,8 @@ function saveGasto() {
 // ============================================================
 // INGRESOS
 // ============================================================
+let editingIngresoId = null;
+
 function renderIngresos() {
   const mk = monthKey(currentIngresosMonth.y, currentIngresosMonth.m);
   document.getElementById('ingresos-month-label').textContent = monthLabel(currentIngresosMonth.y, currentIngresosMonth.m);
@@ -1406,11 +1408,72 @@ function renderIngresos() {
     <div class="card"><div class="card-title">Total Equivalente $</div><div class="card-value">${fmt(totalP + totalU*tc)}</div><div class="card-sub">TC: $${tc.toLocaleString()}</div></div>
   `;
 
-  document.getElementById('ingresos-body').innerHTML = ing.map(i => `
-    <tr><td>${i.concepto}</td><td><span class="badge badge-gray">${i.tipo}</span></td>
-    <td class="text-right font-mono">${i.monto_pesos>0?fmt(i.monto_pesos):'-'}</td>
-    <td class="text-right font-mono">${i.monto_usd>0?fmtUSD(i.monto_usd):'-'}</td></tr>
-  `).join('') || '<tr><td colspan="4" class="empty-state"><p>No hay ingresos cargados</p></td></tr>';
+  if (!ing.length) {
+    document.getElementById('ingresos-body').innerHTML = '<tr><td colspan="5" class="empty-state"><p>No hay ingresos cargados</p></td></tr>';
+    return;
+  }
+
+  document.getElementById('ingresos-body').innerHTML = ing.map(i => {
+    if (editingIngresoId === i.id) {
+      return `
+        <tr style="background:var(--surface2)">
+          <td><input id="ei-concepto" value="${i.concepto}" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;width:100%"></td>
+          <td>
+            <select id="ei-tipo" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px">
+              <option value="Fijo" ${i.tipo==='Fijo'?'selected':''}>Fijo</option>
+              <option value="Variable" ${i.tipo==='Variable'?'selected':''}>Variable</option>
+              <option value="Extraordinario" ${i.tipo==='Extraordinario'?'selected':''}>Extraordinario</option>
+            </select>
+          </td>
+          <td><input id="ei-pesos" type="number" value="${i.monto_pesos||''}" placeholder="0" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;width:120px;text-align:right"></td>
+          <td><input id="ei-usd" type="number" value="${i.monto_usd||''}" placeholder="0" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;width:100px;text-align:right"></td>
+          <td style="white-space:nowrap">
+            <button onclick="saveEditIngreso('${i.id}')" style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600;margin-right:4px">✓</button>
+            <button onclick="cancelEditIngreso()" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">✕</button>
+          </td>
+        </tr>`;
+    }
+    return `
+      <tr>
+        <td>${i.concepto}</td>
+        <td><span class="badge badge-gray">${i.tipo}</span></td>
+        <td class="text-right font-mono">${i.monto_pesos>0?fmt(i.monto_pesos):'-'}</td>
+        <td class="text-right font-mono">${i.monto_usd>0?fmtUSD(i.monto_usd):'-'}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button onclick="startEditIngreso('${i.id}')" title="Editar" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:2px 6px" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">✏️</button>
+          <button onclick="deleteIngreso('${i.id}')" title="Eliminar" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:2px 6px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted)'">🗑️</button>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+function startEditIngreso(id) {
+  editingIngresoId = id;
+  renderIngresos();
+}
+
+function cancelEditIngreso() {
+  editingIngresoId = null;
+  renderIngresos();
+}
+
+function saveEditIngreso(id) {
+  const mk = monthKey(currentIngresosMonth.y, currentIngresosMonth.m);
+  const concepto = document.getElementById('ei-concepto').value.trim();
+  const monto_pesos = parseFloat(document.getElementById('ei-pesos').value)||0;
+  const monto_usd = parseFloat(document.getElementById('ei-usd').value)||0;
+  const tipo = document.getElementById('ei-tipo').value;
+  if (!concepto) { toast('Completá el concepto'); return; }
+  state.ingresos[mk] = state.ingresos[mk].map(i => i.id === id ? {...i, concepto, monto_pesos, monto_usd, tipo} : i);
+  editingIngresoId = null;
+  saveState(); renderIngresos(); toast('Ingreso actualizado');
+}
+
+function deleteIngreso(id) {
+  const mk = monthKey(currentIngresosMonth.y, currentIngresosMonth.m);
+  state.ingresos[mk] = (state.ingresos[mk]||[]).filter(i => i.id !== id);
+  editingIngresoId = null;
+  saveState(); renderIngresos(); toast('Ingreso eliminado');
 }
 
 function changeMonthIngresos(d) {
