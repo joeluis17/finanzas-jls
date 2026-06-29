@@ -494,12 +494,22 @@
     <div id="apikey-status" class="mt-1 text-muted" style="font-size:12px"></div>
   </div>
   <div class="card mb-2">
-    <div class="card-title">Tipo de Cambio</div>
+    <div class="card-title">Tipo de Cambio — Default</div>
     <div class="flex gap-2 mt-1">
       <input class="input" type="number" id="tc-input" placeholder="1420" style="max-width:160px">
       <button class="btn btn-secondary" onclick="saveTipoCambio()">Guardar</button>
     </div>
     <div class="card-sub mt-1" id="tc-actual">Actual: $1.420</div>
+  </div>
+  <div class="card mb-2">
+    <div class="card-title">Tipo de Cambio por Mes</div>
+    <div class="card-sub mt-1 mb-2" style="font-size:12px">Se usa para convertir ingresos/egresos en USD. Editá el valor de cada mes directamente.</div>
+    <div id="tc-mes-list"></div>
+    <div class="mt-2 flex gap-2">
+      <input class="input" type="month" id="tc-mes-nuevo-mes" style="max-width:160px">
+      <input class="input" type="number" id="tc-mes-nuevo-valor" placeholder="TC" style="max-width:100px">
+      <button class="btn btn-secondary btn-sm" onclick="addTCMes()">+ Agregar mes</button>
+    </div>
   </div>
   <div class="card">
     <div class="card-title">Datos</div>
@@ -575,8 +585,7 @@
 const CATEGORIES = ['🛒 Supermercado','🍽️ Restaurantes','⛽ Nafta','🎬 Suscripciones','✈️ Viajes','👗 Ropa','🏥 Salud','🏠 Hogar','🐾 Mascotas','🚗 Auto / Peajes','🎓 Educación','🏋️ Deporte / Club','📱 Tecnología','💊 Farmacia','🎁 Regalos','💰 Otros'];
 const CAT_COLORS = ['#4f8fff','#2ecc87','#f7c948','#7c5cfc','#ff5c6a','#ff9f4a','#26c6da','#ab47bc','#66bb6a','#ef5350','#5c6bc0','#26a69a','#8d6e63','#ec407a','#ffa726','#78909c'];
 const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-// TC del 1° de cada mes según tu Excel
-const TC_MES = {'2026-01':1530,'2026-02':1440,'2026-03':1425,'2026-04':1400,'2026-05':1420};
+// TC por mes — ahora vive en state.tcMes (editable desde Configuración)
 
 let state = loadState();
 let currentDashMonth = {y:2026, m:4}; // 0-indexed
@@ -593,7 +602,8 @@ function defaultState() {
     ahorros: getDefaultAhorros(),
     budgets: {},
     tipoCambio: 1420,
-    apiKey: ''
+    apiKey: '',
+    tcMes: {'2026-01':1530,'2026-02':1440,'2026-03':1425,'2026-04':1400,'2026-05':1420}
   };
 }
 
@@ -607,6 +617,7 @@ function loadState() {
 
 
 function saveState() {
+  state.lastModified = Date.now();
   localStorage.setItem('jls_finanzas_v3', JSON.stringify(state));
   driveAutoSave();
 }
@@ -822,11 +833,19 @@ function monthKey(y,m) { return y+'-'+(m<9?'0':'')+(m+1); }
 function monthLabel(y,m) { return MONTHS[m]+' '+y; }
 function txMonth(t) { return t.fecha ? t.fecha.substring(0,7) : ''; }
 
+function getActiveMonths() {
+  const all = new Set();
+  state.transactions.forEach(t => { if (t.fecha) all.add(t.fecha.substring(0,7)); });
+  Object.keys(state.gastosFijos).forEach(m => all.add(m));
+  Object.keys(state.ingresos).forEach(m => all.add(m));
+  return [...all].filter(Boolean).sort();
+}
+
 // ============================================================
 // DASHBOARD
 // ============================================================
 function getTCMes(mk) {
-  return TC_MES[mk] || state.tipoCambio || 1420;
+  return (state.tcMes || {})[mk] || state.tipoCambio || 1420;
 }
 
 function getMonthBalance(mk) {
@@ -898,7 +917,7 @@ function renderDashboard() {
   });
 
   // Bar chart (monthly ingresos reales vs egresos)
-  const months = ['2026-01','2026-02','2026-03','2026-04','2026-05'];
+  const months = getActiveMonths();
   const monthlyData = months.map(m => getMonthBalance(m));
   destroyChart('chart-bar');
   charts['chart-bar'] = new Chart(document.getElementById('chart-bar'), {
@@ -1632,7 +1651,7 @@ function deleteBudget(cat) {
 // COMPARATIVA
 // ============================================================
 function renderComparativa() {
-  const months = ['2026-01','2026-02','2026-03','2026-04','2026-05'];
+  const months = getActiveMonths();
   const labels = months.map(m => MONTHS[parseInt(m.split('-')[1])-1].substring(0,3));
 
   const egresos = months.map(m => state.transactions.filter(t=>txMonth(t)===m).reduce((s,t)=>s+(t.monto_pesos||0),0) + (state.gastosFijos[m]||[]).reduce((s,g)=>s+g.monto,0));
@@ -1640,10 +1659,9 @@ function renderComparativa() {
   const fijos = months.map(m => (state.gastosFijos[m]||[]).reduce((s,g)=>s+g.monto,0));
   const variables = egresos.map((e,i)=>e-fijos[i]);
 
-  const tc = state.tipoCambio||1420;
-  // Historical data from your Excel
-  const balanceUSD = [-1465,-2059,-3128,-1889,-1425];
-  const balanceUSDnegro = [1918,1324,-218,1021,1485];
+  // Calculado dinámicamente desde state
+  const balanceUSD = months.map(m => { const b = getMonthBalance(m); return Math.round((b.totalPesos - b.totalEgresos) / getTCMes(m)); });
+  const balanceUSDnegro = months.map(m => Math.round(getMonthBalance(m).balance / getTCMes(m)));
 
   destroyChart('chart-comparativa');
   charts['chart-comparativa'] = new Chart(document.getElementById('chart-comparativa'), {
@@ -1685,8 +1703,6 @@ function renderComparativa() {
   });
 
   // Table
-  const tcMap = {1530:1,1440:2,1425:3,1400:4,1420:5};
-  const tcs = [1530,1440,1425,1400,1420];
   document.getElementById('comparativa-body').innerHTML = months.map((m,i) => {
     const ing = ingresos[i], eg = egresos[i], bal = ing-eg;
     return `<tr>
@@ -1708,9 +1724,53 @@ function renderConfig() {
   document.getElementById('apikey-status').textContent = key ? '✅ API key configurada' : '❌ Sin API key';
   document.getElementById('tc-input').value = state.tipoCambio || 1420;
   document.getElementById('tc-actual').textContent = 'Actual: $' + (state.tipoCambio||1420).toLocaleString();
+  renderTCMesList();
   driveUpdateConfigUI();
   if (driveToken && driveFileId) driveSetStatus('connected', '☁️ Conectado');
   else driveSetStatus('disconnected', 'Drive');
+}
+
+function renderTCMesList() {
+  const tcMes = state.tcMes || {};
+  const mesesActivos = getActiveMonths();
+  const todosLosMeses = [...new Set([...Object.keys(tcMes), ...mesesActivos])].sort().reverse();
+  const el = document.getElementById('tc-mes-list');
+  if (!el) return;
+  if (!todosLosMeses.length) { el.innerHTML = '<div class="text-muted" style="padding:8px 0;font-size:13px">Cargá datos para ver los meses disponibles</div>'; return; }
+  el.innerHTML = todosLosMeses.map(mk => {
+    const [y, mo] = mk.split('-');
+    const val = tcMes[mk] || state.tipoCambio || 1420;
+    return `<div class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;font-weight:500">${MONTHS[parseInt(mo)-1]} ${y}</span>
+      <div class="flex gap-2" style="align-items:center">
+        <input class="input font-mono" type="number" style="width:110px;text-align:right;padding:5px 8px"
+          value="${val}"
+          onblur="saveTCMes('${mk}', this.value)"
+          onkeydown="if(event.key==='Enter')this.blur()">
+        <span style="font-size:12px;color:var(--muted)">$/USD</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function saveTCMes(mk, val) {
+  const n = parseFloat(val);
+  if (n > 0) {
+    if (!state.tcMes) state.tcMes = {};
+    state.tcMes[mk] = n;
+    saveState();
+    toast('TC de ' + mk + ' → $' + n.toLocaleString('es-AR'));
+  }
+}
+
+function addTCMes() {
+  const mk = document.getElementById('tc-mes-nuevo-mes').value;
+  const val = parseFloat(document.getElementById('tc-mes-nuevo-valor').value);
+  if (!mk || !val || val <= 0) { toast('Completá el mes y el TC'); return; }
+  saveTCMes(mk, val);
+  document.getElementById('tc-mes-nuevo-mes').value = '';
+  document.getElementById('tc-mes-nuevo-valor').value = '';
+  renderTCMesList();
 }
 
 function saveApiKey() {
@@ -1838,7 +1898,7 @@ async function driveLoadOrCreate() {
   }
 }
 
-async function driveLoadData() {
+async function driveLoadData(silent = false) {
   try {
     const res = await fetch(
       `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
@@ -1847,26 +1907,33 @@ async function driveLoadData() {
     if (!res.ok) throw new Error('No se pudo leer el archivo');
     const remoteState = await res.json();
 
-    // Merge: remote wins if it has more transactions
-    const localCount = state.transactions.length;
-    const remoteCount = (remoteState.transactions||[]).length;
+    // Drive es la fuente primaria: gana si es más reciente (o si no hay timestamps)
+    const localModified = state.lastModified || 0;
+    const remoteModified = remoteState.lastModified || 0;
 
-    if (remoteCount > localCount) {
+    if (remoteModified >= localModified) {
+      // Drive tiene datos más recientes o iguales → Drive gana
       state = remoteState;
-      saveState();
+      // Compatibilidad hacia atrás: asegurar campos nuevos
+      if (!state.tcMes) state.tcMes = {'2026-01':1530,'2026-02':1440,'2026-03':1425,'2026-04':1400,'2026-05':1420};
+      if (!state.budgets) state.budgets = {};
+      localStorage.setItem('jls_finanzas_v3', JSON.stringify(state));
       renderDashboard();
-      toast('☁️ Datos cargados desde Drive');
-    } else if (localCount > remoteCount) {
-      // Local is newer, push to Drive
+      if (!silent) toast('☁️ Datos cargados desde Drive');
+    } else {
+      // Local es más reciente (cambios sin conexión) → subir a Drive
       await driveSaveData();
-      toast('☁️ Datos locales subidos a Drive');
+      if (!silent) toast('☁️ Datos locales sincronizados a Drive');
     }
 
     driveSetStatus('connected', '☁️ Conectado');
     updateLastSync();
   } catch(e) {
-    driveSetStatus('error', 'Error al leer');
-    toast('❌ Error al leer desde Drive');
+    if (!silent) {
+      driveSetStatus('error', 'Error al leer');
+      toast('❌ Error al leer desde Drive');
+    }
+    throw e; // re-lanzar para que driveInit() pueda manejar el estado
   }
 }
 
@@ -1959,12 +2026,12 @@ async function driveInit() {
   if (savedToken && savedFileId) {
     driveToken = savedToken;
     driveFileId = savedFileId;
-    driveSetStatus('syncing', 'Reconectando...');
+    driveSetStatus('syncing', 'Sincronizando...');
     try {
-      await driveLoadData();
+      await driveLoadData(true); // silencioso: sin toast de error en reconexión automática
       driveSetStatus('connected', '☁️ Conectado');
     } catch(e) {
-      // Token expired — need to reconnect
+      // Token vencido o sin conexión — pedir reconexión manual
       driveToken = null; driveFileId = null;
       driveSetStatus('disconnected', 'Reconectar Drive');
     }
