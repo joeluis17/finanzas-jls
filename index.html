@@ -317,6 +317,60 @@
     </div>
   </div>
 
+  <!-- ── HISTÓRICO DE TARJETAS ── -->
+  <div class="section-title mt-3" style="flex-wrap:wrap;gap:10px">
+    Histórico de Tarjetas
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Filtrar categoría:</span>
+      <select class="input" style="max-width:220px;font-size:12px" id="hist-filter-cat" onchange="renderHistorico()">
+        <option value="">Todas las categorías</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Visa vs Amex — Por Mes</div>
+      <div class="chart-container" style="height:240px"><canvas id="chart-hist-bars"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Tendencia Histórica</div>
+      <div class="chart-container" style="height:240px"><canvas id="chart-hist-line"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Donuts por categoría: visibles solo cuando no hay filtro activo -->
+  <div class="grid-2 mt-3" id="hist-cat-charts">
+    <div class="card">
+      <div class="card-title">Distribución por Categoría — Visa 9580</div>
+      <div class="chart-container" style="height:220px"><canvas id="chart-hist-visa-cat"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Distribución por Categoría — Amex 2132</div>
+      <div class="chart-container" style="height:220px"><canvas id="chart-hist-amex-cat"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Tabla resumen mensual -->
+  <div class="card mt-3">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mes</th>
+            <th class="text-right">Visa 9580</th>
+            <th class="text-right">Amex 2132</th>
+            <th class="text-right">Total</th>
+            <th class="text-right">% Visa</th>
+            <th class="text-right">% Amex</th>
+          </tr>
+        </thead>
+        <tbody id="hist-table-body"></tbody>
+        <tfoot id="hist-table-foot"></tfoot>
+      </table>
+    </div>
+  </div>
+
   <div class="section-title mt-3">
     Todas las Transacciones
     <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="openAddTx()">+ Agregar manual</button>
@@ -1036,6 +1090,7 @@ function renderTarjetas() {
   document.getElementById('apikey-banner-tarjetas').innerHTML = haKey ? '' :
     `<div class="apikey-banner"><span>⚡ Configurá tu API key de Claude en <b>⚙️ Configuración</b> para categorizar gastos con IA automáticamente.</span><button class="btn btn-secondary btn-sm" onclick="showPage('config');document.querySelectorAll('.nav-btn')[7].classList.add('active')">Configurar</button></div>`;
   populateCatFilters();
+  renderHistorico();
   renderTxTable();
 }
 
@@ -1107,6 +1162,12 @@ function populateCatFilters() {
   if (catSel) catSel.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c=>`<option>${c}</option>`).join('');
   const mSel = document.getElementById('tx-filter-month');
   if (mSel) mSel.innerHTML = '<option value="">Todos los meses</option>' + months.map(m=>{const [y,mo]=m.split('-');return `<option value="${m}">${MONTHS[parseInt(mo)-1]} ${y}</option>`;}).join('');
+  // Histórico filter
+  const histCatSel = document.getElementById('hist-filter-cat');
+  if (histCatSel) {
+    const prevVal = histCatSel.value;
+    histCatSel.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c=>`<option ${c===prevVal?'selected':''}>${c}</option>`).join('');
+  }
   // Also populate modal cat selects
   ['m-tx-cat','m-budget-cat'].forEach(id => {
     const el = document.getElementById(id);
@@ -1117,6 +1178,154 @@ function populateCatFilters() {
 function updateCat(id, cat) {
   const t = state.transactions.find(t=>t.id===id);
   if (t) { t.categoria = cat; saveState(); toast('Categoría actualizada'); }
+}
+
+// ============================================================
+// HISTÓRICO DE TARJETAS
+// ============================================================
+function renderHistorico() {
+  const filterCat = (document.getElementById('hist-filter-cat')||{}).value || '';
+
+  // Months that have Visa or Amex transactions
+  const months = [...new Set(
+    state.transactions
+      .filter(t => t.tarjeta === 'Visa 9580' || t.tarjeta === 'Amex 2132')
+      .map(t => txMonth(t))
+  )].filter(Boolean).sort();
+
+  if (!months.length) return;
+
+  const getTotal = (month, card) =>
+    state.transactions
+      .filter(t => txMonth(t) === month && t.tarjeta === card && (!filterCat || t.categoria === filterCat))
+      .reduce((s, t) => s + (t.monto_pesos || 0), 0);
+
+  const visaData = months.map(m => getTotal(m, 'Visa 9580'));
+  const amexData = months.map(m => getTotal(m, 'Amex 2132'));
+  const labels = months.map(m => {
+    const [y, mo] = m.split('-');
+    return MONTHS[parseInt(mo)-1].substring(0,3) + ' ' + y.slice(2);
+  });
+
+  // ── Chart 1: Grouped bars ──
+  destroyChart('chart-hist-bars');
+  charts['chart-hist-bars'] = new Chart(document.getElementById('chart-hist-bars'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {label:'Visa 9580', data:visaData, backgroundColor:'rgba(79,143,255,.75)', borderRadius:5},
+        {label:'Amex 2132', data:amexData, backgroundColor:'rgba(124,92,252,.75)', borderRadius:5}
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#7a85a3',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#7a85a3'},grid:{color:'#2a3048'}},
+        y:{ticks:{color:'#7a85a3',callback:v=>'$'+Math.round(v/1000)+'k'},grid:{color:'#2a3048'}}
+      }
+    }
+  });
+
+  // ── Chart 2: Line trend ──
+  destroyChart('chart-hist-line');
+  charts['chart-hist-line'] = new Chart(document.getElementById('chart-hist-line'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {label:'Visa 9580', data:visaData, borderColor:'#4f8fff', backgroundColor:'rgba(79,143,255,.08)', fill:true, tension:.35, pointBackgroundColor:'#4f8fff', pointRadius:4},
+        {label:'Amex 2132', data:amexData, borderColor:'#7c5cfc', backgroundColor:'rgba(124,92,252,.08)', fill:true, tension:.35, pointBackgroundColor:'#7c5cfc', pointRadius:4}
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#7a85a3',font:{size:11}}},
+        tooltip:{callbacks:{label:ctx=>' '+fmt(ctx.raw)}}
+      },
+      scales:{
+        x:{ticks:{color:'#7a85a3'},grid:{color:'#2a3048'}},
+        y:{ticks:{color:'#7a85a3',callback:v=>'$'+Math.round(v/1000)+'k'},grid:{color:'#2a3048'}}
+      }
+    }
+  });
+
+  // ── Category donuts (hidden when filtering by category) ──
+  const catChartsEl = document.getElementById('hist-cat-charts');
+  if (filterCat) {
+    if (catChartsEl) catChartsEl.style.display = 'none';
+    destroyChart('chart-hist-visa-cat');
+    destroyChart('chart-hist-amex-cat');
+  } else {
+    if (catChartsEl) catChartsEl.style.display = 'grid';
+
+    const getCatTotalsForCard = (card) => {
+      const totals = {};
+      state.transactions
+        .filter(t => t.tarjeta === card && t.monto_pesos > 0)
+        .forEach(t => { totals[t.categoria] = (totals[t.categoria]||0) + t.monto_pesos; });
+      return Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,9);
+    };
+
+    const visaCats = getCatTotalsForCard('Visa 9580');
+    const amexCats = getCatTotalsForCard('Amex 2132');
+
+    const donutOpts = (cats) => ({
+      type: 'doughnut',
+      data: {
+        labels: cats.map(([c]) => c),
+        datasets: [{
+          data: cats.map(([,v]) => v),
+          backgroundColor: cats.map(([c]) => CAT_COLORS[CATEGORIES.indexOf(c) % CAT_COLORS.length]),
+          borderWidth:0, hoverOffset:6
+        }]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{
+          legend:{position:'right',labels:{color:'#7a85a3',font:{size:10},boxWidth:10}},
+          tooltip:{callbacks:{label:ctx=>' '+fmt(ctx.raw)+' ('+((ctx.raw/cats.reduce((s,[,v])=>s+v,0))*100).toFixed(0)+'%)'}}
+        }
+      }
+    });
+
+    destroyChart('chart-hist-visa-cat');
+    charts['chart-hist-visa-cat'] = new Chart(document.getElementById('chart-hist-visa-cat'), donutOpts(visaCats));
+
+    destroyChart('chart-hist-amex-cat');
+    charts['chart-hist-amex-cat'] = new Chart(document.getElementById('chart-hist-amex-cat'), donutOpts(amexCats));
+  }
+
+  // ── Summary table ──
+  let totalVisa = 0, totalAmex = 0;
+  document.getElementById('hist-table-body').innerHTML = months.map((m, i) => {
+    const v = visaData[i], a = amexData[i], tot = v + a;
+    totalVisa += v; totalAmex += a;
+    const [y, mo] = m.split('-');
+    const pctV = tot > 0 ? (v/tot*100).toFixed(0)+'%' : '-';
+    const pctA = tot > 0 ? (a/tot*100).toFixed(0)+'%' : '-';
+    return `<tr>
+      <td style="font-weight:500">${MONTHS[parseInt(mo)-1]} ${y}</td>
+      <td class="text-right font-mono"><span class="badge badge-blue">${fmt(v)}</span></td>
+      <td class="text-right font-mono"><span class="badge badge-purple">${fmt(a)}</span></td>
+      <td class="text-right font-mono" style="font-weight:700">${fmt(tot)}</td>
+      <td class="text-right" style="color:#4f8fff;font-weight:600">${pctV}</td>
+      <td class="text-right" style="color:#7c5cfc;font-weight:600">${pctA}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty-state"><p>Sin datos</p></td></tr>';
+
+  const grandTotal = totalVisa + totalAmex;
+  document.getElementById('hist-table-foot').innerHTML = `
+    <tr style="border-top:2px solid var(--border)">
+      <td style="font-weight:700;padding:12px">TOTAL</td>
+      <td class="text-right font-mono" style="padding:12px;font-weight:700;color:#4f8fff">${fmt(totalVisa)}</td>
+      <td class="text-right font-mono" style="padding:12px;font-weight:700;color:#7c5cfc">${fmt(totalAmex)}</td>
+      <td class="text-right font-mono" style="padding:12px;font-weight:700">${fmt(grandTotal)}</td>
+      <td class="text-right" style="padding:12px;color:#4f8fff;font-weight:600">${grandTotal>0?(totalVisa/grandTotal*100).toFixed(0)+'%':'-'}</td>
+      <td class="text-right" style="padding:12px;color:#7c5cfc;font-weight:600">${grandTotal>0?(totalAmex/grandTotal*100).toFixed(0)+'%':'-'}</td>
+    </tr>`;
 }
 
 function deleteTx(id) {
