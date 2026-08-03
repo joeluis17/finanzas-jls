@@ -285,10 +285,10 @@
       <div class="section-title">Visa 9580</div>
       <div class="card mb-2">
         <div class="upload-zone" id="drop-visa" onclick="document.getElementById('file-visa').click()" ondragover="dragOver(event,'drop-visa')" ondragleave="dragLeave('drop-visa')" ondrop="dropFile(event,'visa')">
-          <input type="file" id="file-visa" accept=".xlsx,.xls" onchange="handleUpload(event,'Visa 9580')">
+          <input type="file" id="file-visa" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'Visa 9580')">
           <div class="upload-icon">📄</div>
           <div class="upload-title">Subir resumen Visa</div>
-          <div class="upload-sub">Arrastrá el Excel de Santander aquí</div>
+          <div class="upload-sub">Arrastrá el Excel o el PDF de Santander aquí</div>
         </div>
       </div>
       <div class="card" id="visa-summary" style="display:none">
@@ -303,10 +303,10 @@
       <div class="section-title">American Express 2132</div>
       <div class="card mb-2">
         <div class="upload-zone" id="drop-amex" onclick="document.getElementById('file-amex').click()" ondragover="dragOver(event,'drop-amex')" ondragleave="dragLeave('drop-amex')" ondrop="dropFile(event,'amex')">
-          <input type="file" id="file-amex" accept=".xlsx,.xls" onchange="handleUpload(event,'Amex 2132')">
+          <input type="file" id="file-amex" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'Amex 2132')">
           <div class="upload-icon">📄</div>
           <div class="upload-title">Subir resumen Amex</div>
-          <div class="upload-sub">Arrastrá el Excel de Santander aquí</div>
+          <div class="upload-sub">Arrastrá el Excel o el PDF de Santander aquí</div>
         </div>
       </div>
       <div class="card" id="amex-summary" style="display:none">
@@ -1414,13 +1414,22 @@ function dropFile(e, card) { e.preventDefault(); dragLeave('drop-'+card); const 
 function handleUpload(e, card) { const f = e.target.files[0]; if (f) processFile(f, card); }
 
 function processFile(file, cardName) {
+  const esPdf = /\.pdf$/i.test(file.name || '') || file.type === 'application/pdf';
   const reader = new FileReader();
   reader.onload = async (e) => {
     try {
-      const wb = XLSX.read(e.target.result, {type:'array'});
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
-      const transactions = parseCardExcel(data, cardName);
+      let transactions;
+      if (esPdf) {
+        const res = await parseCardPdf(e.target.result, cardName);
+        if (!res) return;
+        transactions = res.txs;
+        cardName = res.cardName;
+      } else {
+        const wb = XLSX.read(e.target.result, {type:'array'});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+        transactions = parseCardExcel(data, cardName);
+      }
 
       if (!transactions.length) { toast('No se encontraron transacciones en el archivo'); return; }
 
@@ -1431,6 +1440,160 @@ function processFile(file, cardName) {
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// ============================================================
+// LECTURA DE RESÚMENES EN PDF (Santander VISA / AMEX)
+// ============================================================
+let _pdfjsPromise = null;
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('No se pudo cargar ' + src));
+    document.head.appendChild(s);
+  });
+}
+function ensurePdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!_pdfjsPromise) {
+    _pdfjsPromise = (async () => {
+      const fuentes = [
+        {lib:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',       w:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'},
+        {lib:'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js',                  w:'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js'},
+        {lib:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',       w:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'}
+      ];
+      for (const f of fuentes) {
+        try {
+          await loadScriptOnce(f.lib);
+          if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = f.w; return window.pdfjsLib; }
+        } catch(e) { /* probamos la siguiente fuente */ }
+      }
+      _pdfjsPromise = null;
+      throw new Error('No se pudo cargar el lector de PDF (¿sin internet?)');
+    })();
+  }
+  return _pdfjsPromise;
+}
+
+const MESES_PDF = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,set:8,sep:8,oct:9,nov:10,dic:11};
+function mesFromToken(tok) {
+  const k = String(tok||'').toLowerCase()
+    .replace(/á/g,'a').replace(/é/g,'e').replace(/í/g,'i').replace(/ó/g,'o').replace(/ú/g,'u')
+    .replace(/[^a-z]/g,'').slice(0,3);
+  return MESES_PDF[k];
+}
+function parseMontoPdf(s) {
+  if (!s) return 0;
+  const neg = /-/.test(s);
+  const n = parseFloat(String(s).replace(/[^\d.,]/g,'').replace(/\./g,'').replace(',','.')) || 0;
+  return neg ? -n : n;
+}
+
+// Filas que NO son consumos: pagos, saldos, totales, impuestos y textos legales
+const PDF_SKIP_RE = /(SALDO ANTERIOR|SALDO ACTUAL|SU PAGO|PAGO MINIMO|TOTAL CONSUMOS|IMPUESTO DE SELLOS|IIBB|IVA RG|DB\.RG|PERCEP|INTERESES|SEG\.VIDA|SEGURO|COMISION|COMISIÓN|CFTEA|TNA|CUOTAS A VENCER|LIMITES|PLAN V\.|EXPRESS PLAN)/i;
+
+function pdfRowsFromItems(items) {
+  const map = {};
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const key = Math.round(it.transform[5]/2)*2; // agrupa por línea con tolerancia
+    (map[key] = map[key] || []).push({x: it.transform[4], s: it.str});
+  }
+  return Object.keys(map).map(Number).sort((a,b)=>b-a)
+    .map(y => ({y, items: map[y].sort((a,b)=>a.x-b.x)}));
+}
+
+function parsePdfPageRows(rows, ctx) {
+  const out = [];
+  // Calibra las columnas $ / U$S con el encabezado de la página
+  for (const r of rows) {
+    const usd = r.items.find(i => i.s.trim() === 'U$S');
+    const peso = r.items.find(i => i.s.trim() === '$');
+    const fecha = r.items.find(i => /^Fecha/.test(i.s.trim()));
+    if (usd && peso && fecha) { ctx.xPesos = peso.x; ctx.xUsd = usd.x; break; }
+  }
+  const zoneStart = ctx.xPesos - 60;
+  const mid = (ctx.xPesos + ctx.xUsd) / 2;
+
+  for (const r of rows) {
+    const left = r.items.filter(i => i.x < zoneStart).map(i => i.s.trim()).join(' ').replace(/\s+/g,' ').trim();
+    const amts = r.items.filter(i => i.x >= zoneStart && /^-?[\d.]+,\d{2}-?\s*\*?$/.test(i.s.trim()));
+    if (!left) continue;
+
+    // ¿la fila abre un bloque con año + mes? (ej: "26 Julio" o "25 Diciem.")
+    const blk = left.match(/^(\d{2})\s+([A-Za-zÁÉÍÓÚáéíóúñ]{3,10}\.?)\s+(.*)$/);
+    let rest = left;
+    if (blk && mesFromToken(blk[2]) !== undefined) {
+      ctx.year = 2000 + parseInt(blk[1]);
+      ctx.month = mesFromToken(blk[2]);
+      rest = blk[3];
+    }
+    if (ctx.month === null || ctx.month === undefined) continue;
+    if (!amts.length) continue;
+
+    const m = rest.match(/^(\d{1,2})\s+(?:(\d{4,6})\s+)?([*K])?\s*(.+)$/);
+    if (!m) continue;
+    const day = parseInt(m[1]);
+    if (!(day >= 1 && day <= 31)) continue;
+    let desc = m[4].trim();
+    if (PDF_SKIP_RE.test(rest) || PDF_SKIP_RE.test(desc)) continue;
+
+    // Cuotas: "C.03/06" -> "3 de 6"
+    let cuotas = '';
+    const cm = desc.match(/C\.(\d{1,2})\/(\d{1,2})/);
+    if (cm) { cuotas = parseInt(cm[1]) + ' de ' + parseInt(cm[2]); desc = desc.replace(cm[0],'').trim(); }
+
+    desc = desc
+      .replace(/\b\d{8,}\b/g,'')                       // referencias numéricas largas
+      .replace(/\b(?=[A-Z0-9]*\d)[A-Z0-9]{7,}\b/g,'')  // códigos tipo ML7X2VUSD
+      .replace(/\s[\d.]+,\d{2}\s*$/,'')                // importe suelto al final
+      .replace(/^=+/,'').replace(/\s{2,}/g,' ').replace(/[\s.]+$/,'').trim();
+    if (!desc || desc.length < 2) continue;
+
+    let pesos = 0, usd = 0;
+    for (const a of amts) {
+      const v = parseMontoPdf(a.s);
+      if (a.x >= mid) usd += v; else pesos += v;
+    }
+    if (!pesos && !usd) continue;
+
+    const mm = String(ctx.month+1).padStart(2,'0'), dd = String(day).padStart(2,'0');
+    out.push({fecha: ctx.year+'-'+mm+'-'+dd, descripcion: desc, cuotas, monto_pesos: pesos, monto_usd: usd});
+  }
+  return out;
+}
+
+async function parseCardPdf(arrayBuffer, cardName) {
+  const pdfjs = await ensurePdfJs();
+  const pdf = await pdfjs.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
+  const ctx = {year:null, month:null, xPesos:439, xUsd:533};
+  let filas = [], texto = '';
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    if (p <= 2) texto += content.items.map(i=>i.str).join(' ') + ' ';
+    filas = filas.concat(parsePdfPageRows(pdfRowsFromItems(content.items), ctx));
+  }
+
+  // Detecta la tarjeta del PDF y avisa si no coincide con el recuadro usado
+  const detectada = /AMERICAN EXPRESS/i.test(texto) ? 'Amex 2132' : (/VISA/i.test(texto) ? 'Visa 9580' : null);
+  if (detectada && detectada !== cardName) {
+    if (!confirm(`Este PDF parece ser de ${detectada}, pero lo subiste en el recuadro de ${cardName}.\n\n¿Importarlo como ${detectada}?`)) return null;
+    cardName = detectada;
+  }
+
+  const txs = filas.map(f => ({
+    id: 'tx_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+    fecha: f.fecha,
+    descripcion: f.descripcion,
+    cuotas: f.cuotas,
+    monto_pesos: f.monto_pesos,
+    monto_usd: f.monto_usd,
+    tarjeta: cardName,
+    categoria: autoCategorize(f.descripcion),
+    recurrente: 0
+  }));
+  return {txs, cardName};
 }
 
 function parseCardExcel(data, cardName) {
@@ -1506,27 +1669,48 @@ async function showAILoading(cardName, transactions) {
     }
   }
 
-  // Remove existing transactions from same card and same months covered
-  const months = [...new Set(finalTxs.map(t=>txMonth(t)))];
-  state.transactions = state.transactions.filter(t => !(t.tarjeta === cardName && months.includes(txMonth(t))) || t.id.startsWith('default_'));
+  // Mes principal del resumen = el mes con más movimientos (el período que se está liquidando).
+  // Solo ese mes se reemplaza; las cuotas viejas de otros meses se agregan sin pisar el historial.
+  const conteo = {};
+  finalTxs.forEach(t => { const m = txMonth(t); if (m) conteo[m] = (conteo[m]||0) + 1; });
+  const mesPrincipal = Object.keys(conteo).sort((a,b) => conteo[b]-conteo[a] || b.localeCompare(a))[0] || '';
+
+  state.transactions = state.transactions.filter(t => !(t.tarjeta === cardName && txMonth(t) === mesPrincipal) || t.id.startsWith('default_'));
+
+  // De los meses anteriores solo entran las filas que todavía no existen
+  const clave = t => [t.tarjeta, t.fecha, (t.descripcion||'').toLowerCase().trim(), t.monto_pesos, t.monto_usd].join('|');
+  const nroCuota = c => { const m = String(c||'').match(/(\d+)\s*de\s*(\d+)/); return m ? parseInt(m[1]) : 0; };
+  const existentes = new Map(state.transactions.map(t => [clave(t), t]));
+  const aAgregar = finalTxs.filter(t => {
+    if (txMonth(t) === mesPrincipal) return true;
+    const ya = existentes.get(clave(t));
+    if (!ya) return true;
+    // Misma compra en cuotas ya cargada: solo actualizamos el número de cuota
+    if (nroCuota(t.cuotas) > nroCuota(ya.cuotas)) ya.cuotas = t.cuotas;
+    return false;
+  });
+  const omitidas = finalTxs.length - aAgregar.length;
 
   // Add new transactions
-  state.transactions.push(...finalTxs);
+  state.transactions.push(...aAgregar);
   saveState();
 
   // Update summary card
-  const total = finalTxs.reduce((s,t)=>s+(t.monto_pesos||0),0);
+  const total = aAgregar.reduce((s,t)=>s+(t.monto_pesos||0),0);
+  const totalUsd = aAgregar.reduce((s,t)=>s+(t.monto_usd||0),0);
   const summaryId = cardName === 'Visa 9580' ? 'visa' : 'amex';
-  document.getElementById(summaryId+'-total').textContent = fmt(total);
-  document.getElementById(summaryId+'-cierre').textContent = `${finalTxs.length} transacciones importadas`;
+  document.getElementById(summaryId+'-total').textContent = fmt(total) + (totalUsd>0 ? ' + '+fmtUSD(totalUsd) : '');
+  document.getElementById(summaryId+'-cierre').textContent = `${aAgregar.length} transacciones importadas` + (mesPrincipal ? ` · período ${mkLabel(mesPrincipal)}` : '') + (omitidas ? ` · ${omitidas} ya estaban cargadas` : '');
   document.getElementById(summaryId+'-summary').style.display = 'block';
 
   // Restore upload zone
-  zone.innerHTML = `<input type="file" id="file-${summaryId}" accept=".xlsx,.xls" onchange="handleUpload(event,'${cardName}')"><div class="upload-icon">✅</div><div class="upload-title">Resumen importado</div><div class="upload-sub">Hacé click para reemplazar</div>`;
+  zone.innerHTML = `<input type="file" id="file-${summaryId}" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'${cardName}')"><div class="upload-icon">✅</div><div class="upload-title">Resumen importado</div><div class="upload-sub">Hacé click para reemplazar</div>`;
   zone.querySelector('input').onchange = (e) => handleUpload(e, cardName);
 
+  populateCatFilters();
   renderTxTable();
-  toast(`✅ ${finalTxs.length} transacciones importadas de ${cardName}`);
+  try { renderDashboard(); } catch(e) {}
+  toast(`✅ ${aAgregar.length} transacciones importadas de ${cardName}`);
 }
 
 async function categorizeWithAI(transactions, apiKey) {
