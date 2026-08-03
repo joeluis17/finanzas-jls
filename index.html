@@ -86,6 +86,8 @@
   .btn-sm { padding: 5px 12px; font-size: 12px; }
   .btn-danger { background: #3a1020; color: var(--red); border: 1px solid #5a1a30; }
   .btn-danger:hover { background: #5a1a30; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-danger:disabled:hover { background: #3a1020; }
 
   /* PROGRESS BAR */
   .progress-wrap { background: var(--surface2); border-radius: 99px; height: 7px; overflow: hidden; margin-top: 8px; }
@@ -403,6 +405,7 @@
       <select class="input" style="max-width:140px" id="tx-filter-month" onchange="renderTxTable()">
         <option value="">Todos los meses</option>
       </select>
+      <button class="btn btn-danger btn-sm" id="tx-bulk-delete" style="margin-left:auto" onclick="deleteFilteredTxs()" disabled>🗑️ Borrar movimientos</button>
     </div>
     <div class="table-wrap">
       <table>
@@ -1094,19 +1097,87 @@ function renderTarjetas() {
   renderTxTable();
 }
 
-function renderTxTable() {
-  const search = (document.getElementById('tx-search')||{}).value||'';
-  const filterCard = (document.getElementById('tx-filter-card')||{}).value||'';
-  const filterCat = (document.getElementById('tx-filter-cat')||{}).value||'';
-  const filterMonth = (document.getElementById('tx-filter-month')||{}).value||'';
+function getTxFilters() {
+  return {
+    search: (document.getElementById('tx-search')||{}).value||'',
+    card:   (document.getElementById('tx-filter-card')||{}).value||'',
+    cat:    (document.getElementById('tx-filter-cat')||{}).value||'',
+    month:  (document.getElementById('tx-filter-month')||{}).value||''
+  };
+}
 
-  let txs = [...state.transactions].filter(t => {
-    if (search && !t.descripcion.toLowerCase().includes(search.toLowerCase())) return false;
-    if (filterCard && t.tarjeta !== filterCard) return false;
-    if (filterCat && t.categoria !== filterCat) return false;
-    if (filterMonth && txMonth(t) !== filterMonth) return false;
+function filterTxs(f) {
+  return state.transactions.filter(t => {
+    if (f.search && !(t.descripcion||'').toLowerCase().includes(f.search.toLowerCase())) return false;
+    if (f.card && t.tarjeta !== f.card) return false;
+    if (f.cat && t.categoria !== f.cat) return false;
+    if (f.month && txMonth(t) !== f.month) return false;
     return true;
-  }).sort((a,b) => b.fecha.localeCompare(a.fecha));
+  });
+}
+
+function mkLabel(mk) {
+  if (!mk) return '';
+  const [y,mo] = String(mk).split('-');
+  return MONTHS[parseInt(mo)-1] + ' ' + y;
+}
+
+function updateBulkDeleteBtn(f, count) {
+  const btn = document.getElementById('tx-bulk-delete');
+  if (!btn) return;
+  // Solo se habilita si hay tarjeta y/o mes elegidos, para no borrar todo por accidente
+  const scoped = !!(f.card || f.month);
+  btn.disabled = !scoped || count === 0;
+  if (!scoped) {
+    btn.textContent = '🗑️ Elegí tarjeta o mes';
+    btn.title = 'Seleccioná una tarjeta y/o un mes para poder borrar';
+  } else {
+    const partes = [f.card || 'todas las tarjetas', f.month ? mkLabel(f.month) : 'todos los meses'];
+    btn.textContent = `🗑️ Borrar ${count} de ${partes.join(' – ')}`;
+    btn.title = 'Borra los movimientos que estás viendo con estos filtros';
+  }
+}
+
+function deleteFilteredTxs() {
+  const f = getTxFilters();
+  if (!f.card && !f.month) { toast('Elegí una tarjeta y/o un mes primero'); return; }
+  const doomed = filterTxs(f);
+  if (!doomed.length) { toast('No hay movimientos para borrar'); return; }
+
+  const totalPesos = doomed.reduce((s,t)=>s+(t.monto_pesos||0),0);
+  const totalUSD = doomed.reduce((s,t)=>s+(t.monto_usd||0),0);
+  const detalle = [
+    `Tarjeta: ${f.card || 'todas'}`,
+    `Mes: ${f.month ? mkLabel(f.month) : 'todos'}`,
+    f.cat ? `Categoría: ${f.cat}` : null,
+    f.search ? `Búsqueda: "${f.search}"` : null
+  ].filter(Boolean).join('\n');
+
+  if (!confirm(`¿Borrar ${doomed.length} movimientos?\n\n${detalle}\nTotal: ${fmt(totalPesos)}${totalUSD>0?' + '+fmtUSD(totalUSD):''}\n\nEsta acción no se puede deshacer.`)) return;
+
+  const ids = new Set(doomed.map(t=>t.id));
+  state.transactions = state.transactions.filter(t => !ids.has(t.id));
+  saveState();
+
+  // Si la tarjeta se quedó sin movimientos, escondemos su tarjeta de resumen
+  ['Visa 9580','Amex 2132'].forEach(card => {
+    const quedan = state.transactions.some(t => t.tarjeta === card);
+    const box = document.getElementById((card === 'Visa 9580' ? 'visa' : 'amex') + '-summary');
+    if (box && !quedan) box.style.display = 'none';
+  });
+
+  txPage = 0;
+  populateCatFilters();
+  renderTxTable();
+  try { if (typeof renderDashboard === 'function') renderDashboard(); } catch(e) {}
+  toast(`🗑️ ${doomed.length} movimientos borrados`);
+}
+
+function renderTxTable() {
+  const f = getTxFilters();
+
+  let txs = filterTxs(f).slice().sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''));
+  updateBulkDeleteBtn(f, txs.length);
 
   // --- Total bar ---
   const totalPesos = txs.reduce((s,t)=>s+(t.monto_pesos||0),0);
