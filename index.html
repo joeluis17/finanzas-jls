@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Finanzas · JLS</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root {
@@ -280,43 +279,21 @@
 <div class="page" id="page-tarjetas">
   <div id="apikey-banner-tarjetas"></div>
 
-  <div class="grid-2">
-    <div>
-      <div class="section-title">Visa 9580</div>
-      <div class="card mb-2">
-        <div class="upload-zone" id="drop-visa" onclick="document.getElementById('file-visa').click()" ondragover="dragOver(event,'drop-visa')" ondragleave="dragLeave('drop-visa')" ondrop="dropFile(event,'visa')">
-          <input type="file" id="file-visa" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'Visa 9580')">
-          <div class="upload-icon">📄</div>
-          <div class="upload-title">Subir resumen Visa</div>
-          <div class="upload-sub">Arrastrá el Excel o el PDF de Santander aquí</div>
-        </div>
-      </div>
-      <div class="card" id="visa-summary" style="display:none">
-        <div class="flex-between mb-2">
-          <div><div class="card-title">Total del resumen</div><div class="card-value" id="visa-total">-</div></div>
-          <span class="badge badge-blue">Visa 9580</span>
-        </div>
-        <div class="card-sub" id="visa-cierre"></div>
-      </div>
+  <div class="section-title">Subir resúmenes</div>
+  <div class="card mb-2">
+    <div class="upload-zone" id="drop-pdf" onclick="document.getElementById('file-pdf').click()" ondragover="dragOver(event,'drop-pdf')" ondragleave="dragLeave('drop-pdf')" ondrop="dropFiles(event)">
+      <input type="file" id="file-pdf" accept=".pdf" multiple onchange="handleUpload(event)">
+      <div class="upload-icon">📄</div>
+      <div class="upload-title">Arrastrá los PDF de Santander</div>
+      <div class="upload-sub">Visa y Amex juntos, de a uno o todos de una. La tarjeta y el período se detectan solos.</div>
     </div>
-    <div>
-      <div class="section-title">American Express 2132</div>
-      <div class="card mb-2">
-        <div class="upload-zone" id="drop-amex" onclick="document.getElementById('file-amex').click()" ondragover="dragOver(event,'drop-amex')" ondragleave="dragLeave('drop-amex')" ondrop="dropFile(event,'amex')">
-          <input type="file" id="file-amex" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'Amex 2132')">
-          <div class="upload-icon">📄</div>
-          <div class="upload-title">Subir resumen Amex</div>
-          <div class="upload-sub">Arrastrá el Excel o el PDF de Santander aquí</div>
-        </div>
-      </div>
-      <div class="card" id="amex-summary" style="display:none">
-        <div class="flex-between mb-2">
-          <div><div class="card-title">Total del resumen</div><div class="card-value" id="amex-total">-</div></div>
-          <span class="badge badge-purple">Amex 2132</span>
-        </div>
-        <div class="card-sub" id="amex-cierre"></div>
-      </div>
+  </div>
+  <div class="card mb-2" id="import-summary" style="display:none">
+    <div class="flex-between mb-2">
+      <div class="card-title" style="margin:0">Última importación</div>
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('import-summary').style.display='none'">Ocultar</button>
     </div>
+    <div id="import-detalle"></div>
   </div>
 
   <!-- ── HISTÓRICO DE TARJETAS ── -->
@@ -639,8 +616,8 @@
 // ============================================================
 // DATA & STATE
 // ============================================================
-const CATEGORIES = ['🛒 Supermercado','🍽️ Restaurantes','⛽ Nafta','🎬 Suscripciones','✈️ Viajes','👗 Ropa','🏥 Salud','🏠 Hogar','🐾 Mascotas','🚗 Auto / Peajes','🎓 Educación','🏋️ Deporte / Club','📱 Tecnología','💊 Farmacia','🎁 Regalos','💰 Otros'];
-const CAT_COLORS = ['#4f8fff','#2ecc87','#f7c948','#7c5cfc','#ff5c6a','#ff9f4a','#26c6da','#ab47bc','#66bb6a','#ef5350','#5c6bc0','#26a69a','#8d6e63','#ec407a','#ffa726','#78909c'];
+const CATEGORIES = ['🛒 Supermercado','🍽️ Restaurantes','⛽ Nafta','🎬 Suscripciones','✈️ Viajes','👗 Ropa','🏥 Salud','🏠 Hogar','🐾 Mascotas','🚗 Auto / Peajes','🎓 Educación','🏋️ Deporte / Club','📱 Tecnología','💊 Farmacia','🎁 Regalos','🛡️ Seguros','⚡ Servicios','💰 Otros'];
+const CAT_COLORS = ['#4f8fff','#2ecc87','#f7c948','#7c5cfc','#ff5c6a','#ff9f4a','#26c6da','#ab47bc','#66bb6a','#ef5350','#5c6bc0','#26a69a','#8d6e63','#ec407a','#ffa726','#00897b','#fbc02d','#78909c'];
 const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 // TC por mes — ahora vive en state.tcMes (editable desde Configuración)
 
@@ -841,21 +818,46 @@ function getDefaultAhorros() {
 // ============================================================
 function autoCategorize(desc) {
   if (!desc) return '💰 Otros';
-  const d = desc.toLowerCase();
-  if (/netflix|spotify|apple|disney|hbo|prime|paramount|flow|deezer/.test(d)) return '🎬 Suscripciones';
-  if (/carrefour|jumbo|dia|coto|walmart|supermercado|super|hipermercado/.test(d)) return '🛒 Supermercado';
-  if (/ypf|shell|axion|puma|nafta|combustible/.test(d)) return '⛽ Nafta';
-  if (/despegar|airbnb|booking|aerol|hotel|vuelo|viaje|ansilta/.test(d)) return '✈️ Viajes';
-  if (/farmacity|farmacia|drogueria|farma/.test(d)) return '💊 Farmacia';
-  if (/restaurant|cafe|cafeteria|panaderia|brioche|tostado|coffee|bar|pizza|guerrin|moletaco|rouen|legado|kissaten|typica|confiteria/.test(d)) return '🍽️ Restaurantes';
-  if (/zara|isadora|ropa|indumentaria|equus/.test(d)) return '👗 Ropa';
-  if (/pet|mascota|veterinaria|comfypet|alparamis|tiendanatura/.test(d)) return '🐾 Mascotas';
-  if (/autopista|telepeaje|peaje|urban|sur/.test(d)) return '🚗 Auto / Peajes';
-  if (/club|gimnasio|deporte|sporting|sport|san fernando/.test(d)) return '🏋️ Deporte / Club';
-  if (/personal|claro|movistar|telecom|telefon/.test(d)) return '📱 Tecnología';
-  if (/carniceria|verduleria|almacen/.test(d)) return '🛒 Supermercado';
-  if (/allpago|expensas|alquiler|municipal/.test(d)) return '🏠 Hogar';
-  if (/cruz vinos|vinos|bebida/.test(d)) return '🍽️ Restaurantes';
+  // Normaliza: saca prefijos de pasarelas (MERPAGO*, PAYU*AR*, 3SM*, PVS*, DLO, FUDO *, PROPINA*)
+  const d = String(desc).toLowerCase()
+    .replace(/[áàä]/g,'a').replace(/[éèë]/g,'e').replace(/[íìï]/g,'i').replace(/[óòö]/g,'o').replace(/[úùü]/g,'u')
+    .replace(/^=+/,'')
+    .replace(/\b(merpago|payu\*ar|payu|3sm|pvs|fudo|dlo|pagos360|mp)\s*\*+\s*/g,' ')
+    .replace(/\*/g,' ').replace(/\s+/g,' ').trim();
+
+  // Suscripciones y streaming
+  if (/netflix|spotify|apple|disney|hbo|max\b|prime|paramount|flow|deezer|youtube|dropbox|icloud/.test(d)) return '🎬 Suscripciones';
+  // Seguros
+  if (/sancristoba|san cristobal|seguro|galeno|swiss medical|prevencion art|zurich|allianz|sancor seguro/.test(d)) return '🛡️ Seguros';
+  // Servicios (luz, gas, agua, internet, expensas)
+  if (/edenor|edesur|metrogas|naturgy|aysa|abl\b|aguas|camuzzi|expensas|telecentro|fibertel|cablevision/.test(d)) return '⚡ Servicios';
+  // Telefonía y tecnología
+  if (/personal|claro|movistar|telecom|telefon|adobe|dattatec|microsoft|google|openai|anthropic|fravega|garbarino|musimundo|waapps|alternativa|compumundo|mercadolibre|tiendamia|amazon/.test(d)) return '📱 Tecnología';
+  // Supermercados y alimentos
+  if (/carrefour|jumbo|coto|disco|vea\b|walmart|changomas|la anonima|coop|makro|vital|coto|super|hipermercado|coto|inc sa|inc s\.a|market |maxiconsumo|tienda dia|dia%|almacen|carniceria|verduleria|fruteria|pescaderia|dietetica|quesos/.test(d)) return '🛒 Supermercado';
+  // Nafta y estaciones de servicio
+  if (/ypf|shell|axion|puma|refinor|gulf|nafta|combustible|estacion de serv|est de serv|estaciones sh|aca .*comb|full \(|gnc/.test(d)) return '⛽ Nafta';
+  // Farmacia y salud
+  if (/farmacity|farmacia|drogueria|farma|leloir beauty|perfumeria|optica/.test(d)) return '💊 Farmacia';
+  if (/clinica|sanatorio|hospital|laboratorio|odontolog|dentista|medic|kinesio|psicolog|bioquimic/.test(d)) return '🏥 Salud';
+  // Mascotas
+  if (/pet |pet$|puppis|sabuesos|mascota|veterinaria|comfypet|alparamis|tiendanatura|companypet|danbar/.test(d)) return '🐾 Mascotas';
+  // Auto, peajes, estacionamiento
+  if (/autopista|telepeaje|peaje|aubasa|ausol|cvsa|camino |parking|estacionamiento|vtv|lubritodo|lubricentro|gomeria|taller|auxilio|grua|cochera|uber|cabify|didi|remis|taxi/.test(d)) return '🚗 Auto / Peajes';
+  // Viajes
+  if (/despegar|airbnb|booking|aerol|latam|flybondi|hotel|vuelo|viaje|ansilta|duty free|almundo|turismo|hostel|cabañas|tripstore/.test(d)) return '✈️ Viajes';
+  // Deporte y club
+  if (/club|gimnasio|gym|deporte|sporting|sport|san fernando|decathlon|naka outdoors|siete cumbres|nevada|ski|padel|tenis|futbol|dexter|stock center/.test(d)) return '🏋️ Deporte / Club';
+  // Ropa e indumentaria
+  if (/zara|isadora|ropa|indumentaria|equus|bensimon|vaypol|prune|rapsodia|levis|adidas|nike|puma store|akiabara|kevingston|montagne|cardon|calzado|zapateria|bimbi|blest/.test(d)) return '👗 Ropa';
+  // Hogar, ferretería, muebles
+  if (/sodimac|easy\b|ferreteria|hammer|pampa cabildo|full habitat|mueble|deco|bazar|blanqueria|pintureria|electricidad|jardin|newgarden|vivero|allpago|alquiler|municipal|silear|koizer/.test(d)) return '🏠 Hogar';
+  // Educación y librería
+  if (/libreria|universidad|colegio|instituto|curso|educac|papeleria|udemy|coursera/.test(d)) return '🎓 Educación';
+  // Gastronomía: delivery, restaurantes, cafés, panaderías
+  if (/pedidosya|pedidos ya|rappi|propina|delivery|restaurant|^res |resto|parrilla|bodegon|cantina|pizzer|pizza|sushi|burger|mc ?donalds|kentucky|havanna|starbucks|cafe|cafeteria|coffee|panaderia|confiteria|pasteleria|heladeria|helados|cerveceria|brewing| bar |bar$|pub\b|vinoteca|vinos|bebida|brioche|tostado|guerrin|moletaco|rouen|legado|kissaten|typica|forno|romario|prados|arredondo|mangini|soberana|pie de cabra|vereda adentro|mingoo|elefante|snack|bowling|kansas|fraga|del rio|angelin|epoca de quesos|casita suiza|jack house|the oldest|austria|cerdos voladores|alohapapas|farola|hatsu|fabric|tomasso|lardo|motin y fuegos|la juvenil|malvada|bebop|bocadito|pesto|pulperia|maldiro|shelter|panaderiadon|mariamongelos|fandpandon|donvalentn|capr?ichito|arcosbar|jazmina|la lucila|typica/.test(d)) return '🍽️ Restaurantes';
+  // Regalos
+  if (/regaleria|regalo|florer|flores|joyeria|libreria eduard/.test(d)) return '🎁 Regalos';
   return '💰 Otros';
 }
 
@@ -1058,7 +1060,10 @@ function renderCuotasProyectadas() {
       upcoming[mk].push({desc:t.descripcion, monto:t.monto_pesos, tarjeta:t.tarjeta, cuota:`${current+i}/${total}`});
     }
   });
-  const keys = Object.keys(upcoming).sort().slice(0,4);
+  // Solo de este mes en adelante: las cuotas que ya vencieron no son "futuras"
+  const hoy = new Date();
+  const mkHoy = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
+  const keys = Object.keys(upcoming).filter(mk => mk >= mkHoy).sort().slice(0,4);
   if (!keys.length) { document.getElementById('cuotas-proyectadas').innerHTML = '<div class="empty-state"><p>No hay cuotas futuras</p></div>'; return; }
   document.getElementById('cuotas-proyectadas').innerHTML = keys.map(mk => {
     const [y,m] = mk.split('-');
@@ -1410,36 +1415,72 @@ function deleteTx(id) {
 // ============================================================
 function dragOver(e, id) { e.preventDefault(); document.getElementById(id).classList.add('drag'); }
 function dragLeave(id) { document.getElementById(id).classList.remove('drag'); }
-function dropFile(e, card) { e.preventDefault(); dragLeave('drop-'+card); const f = e.dataTransfer.files[0]; if (f) processFile(f, card==='visa'?'Visa 9580':'Amex 2132'); }
-function handleUpload(e, card) { const f = e.target.files[0]; if (f) processFile(f, card); }
+function dropFiles(e) { e.preventDefault(); dragLeave('drop-pdf'); procesarArchivos(Array.from(e.dataTransfer.files || [])); }
+function handleUpload(e) { procesarArchivos(Array.from(e.target.files || [])); e.target.value = ''; }
 
-function processFile(file, cardName) {
-  const esPdf = /\.pdf$/i.test(file.name || '') || file.type === 'application/pdf';
-  const reader = new FileReader();
-  reader.onload = async (e) => {
+const ZONA_PDF_HTML = `<input type="file" id="file-pdf" accept=".pdf" multiple onchange="handleUpload(event)">
+      <div class="upload-icon">📄</div>
+      <div class="upload-title">Arrastrá los PDF de Santander</div>
+      <div class="upload-sub">Visa y Amex juntos, de a uno o todos de una. La tarjeta y el período se detectan solos.</div>`;
+
+async function procesarArchivos(files) {
+  const pdfs = files.filter(f => /\.pdf$/i.test(f.name||'') || f.type === 'application/pdf');
+  if (!pdfs.length) { toast('Solo se pueden subir los resúmenes en PDF'); return; }
+
+  const zone = document.getElementById('drop-pdf');
+  const resultados = [];
+  for (let i = 0; i < pdfs.length; i++) {
+    zone.innerHTML = `<div class="ai-loading"><div class="ai-spinner"></div><div class="ai-text">Leyendo ${i+1} de ${pdfs.length}: ${pdfs[i].name}</div></div>`;
     try {
-      let transactions;
-      if (esPdf) {
-        const res = await parseCardPdf(e.target.result, cardName);
-        if (!res) return;
-        transactions = res.txs;
-        cardName = res.cardName;
-      } else {
-        const wb = XLSX.read(e.target.result, {type:'array'});
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
-        transactions = parseCardExcel(data, cardName);
-      }
-
-      if (!transactions.length) { toast('No se encontraron transacciones en el archivo'); return; }
-
-      // Show loading
-      showAILoading(cardName, transactions);
+      resultados.push(await importarResumenPdf(pdfs[i]));
     } catch(err) {
-      toast('Error al leer el archivo: ' + err.message);
+      resultados.push({archivo: pdfs[i].name, error: err.message});
     }
-  };
-  reader.readAsArrayBuffer(file);
+  }
+  zone.innerHTML = ZONA_PDF_HTML;
+
+  mostrarResumenImportacion(resultados);
+  populateCatFilters();
+  renderTxTable();
+  try { renderDashboard(); } catch(e) {}
+
+  const ok = resultados.filter(r => !r.error);
+  const totalTx = ok.reduce((s,r)=>s+r.agregadas, 0);
+  toast(ok.length === resultados.length
+    ? `✅ ${ok.length} resumen${ok.length>1?'es':''} · ${totalTx} movimientos`
+    : `⚠️ ${ok.length} de ${resultados.length} resúmenes importados`);
+}
+
+function mostrarResumenImportacion(resultados) {
+  const filas = resultados.map(r => {
+    if (r.error) {
+      return `<div class="cuota-item"><div><b>${r.archivo}</b><div class="card-sub" style="color:var(--red)">${r.error}</div></div></div>`;
+    }
+    const badge = r.tarjeta === 'Visa 9580' ? 'badge-blue' : 'badge-purple';
+    const extra = [r.omitidas ? `${r.omitidas} ya estaban` : '', r.reemplazadas ? `${r.reemplazadas} reemplazadas` : ''].filter(Boolean).join(' · ');
+    return `<div class="cuota-item">
+      <div><b>${mkLabel(r.periodo)}</b> <span class="badge ${badge}">${r.tarjeta}</span>
+        <div class="card-sub">${r.agregadas} movimientos${extra ? ' · '+extra : ''}</div></div>
+      <div class="text-right"><div style="font-weight:700">${fmt(r.totalPesos)}</div>
+        ${r.totalUsd ? `<div class="card-sub">${fmtUSD(r.totalUsd)}</div>` : ''}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('import-detalle').innerHTML = filas;
+  document.getElementById('import-summary').style.display = 'block';
+}
+
+async function importarResumenPdf(file) {
+  const buffer = await file.arrayBuffer();
+  const {txs, cardName} = await parseCardPdf(buffer);
+  if (!txs.length) throw new Error('No se encontraron movimientos en el PDF');
+
+  let finalTxs = txs;
+  if (state.apiKey) {
+    try { finalTxs = await categorizeWithAI(txs, state.apiKey); }
+    catch(e) { /* seguimos con la categorización automática */ }
+  }
+  const stats = aplicarImportacion(cardName, finalTxs);
+  return Object.assign({archivo: file.name, tarjeta: cardName}, stats);
 }
 
 // ============================================================
@@ -1563,7 +1604,7 @@ function parsePdfPageRows(rows, ctx) {
   return out;
 }
 
-async function parseCardPdf(arrayBuffer, cardName) {
+async function parseCardPdf(arrayBuffer) {
   const pdfjs = await ensurePdfJs();
   const pdf = await pdfjs.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
   const ctx = {year:null, month:null, xPesos:439, xUsd:533};
@@ -1575,12 +1616,9 @@ async function parseCardPdf(arrayBuffer, cardName) {
     filas = filas.concat(parsePdfPageRows(pdfRowsFromItems(content.items), ctx));
   }
 
-  // Detecta la tarjeta del PDF y avisa si no coincide con el recuadro usado
-  const detectada = /AMERICAN EXPRESS/i.test(texto) ? 'Amex 2132' : (/VISA/i.test(texto) ? 'Visa 9580' : null);
-  if (detectada && detectada !== cardName) {
-    if (!confirm(`Este PDF parece ser de ${detectada}, pero lo subiste en el recuadro de ${cardName}.\n\n¿Importarlo como ${detectada}?`)) return null;
-    cardName = detectada;
-  }
+  // La tarjeta sale del propio PDF
+  const cardName = /AMERICAN EXPRESS/i.test(texto) ? 'Amex 2132' : (/VISA/i.test(texto) ? 'Visa 9580' : null);
+  if (!cardName) throw new Error('No pude identificar si es un resumen de Visa o de Amex');
 
   const txs = filas.map(f => ({
     id: 'tx_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
@@ -1596,89 +1634,20 @@ async function parseCardPdf(arrayBuffer, cardName) {
   return {txs, cardName};
 }
 
-function parseCardExcel(data, cardName) {
-  const txs = [];
-  let inTxSection = false;
-  let lastFecha = null;
-
-  // Find the transaction section (after the card header row with "Fecha" "Descripción")
-  let headerRow = -1;
-  for (let i=0; i<data.length; i++) {
-    const row = data[i];
-    if (row[0] && String(row[0]).trim() === 'Fecha' && row[1] && String(row[1]).trim().toLowerCase().includes('descrip')) {
-      // Check if next row has the actual card transactions (not "Pago de tarjeta")
-      // We want the second "Fecha/Descripcion" header which is the actual transactions
-      if (headerRow > -1) { headerRow = i; break; }
-      headerRow = i;
-    }
-  }
-  if (headerRow === -1) return [];
-
-  for (let i = headerRow+1; i < data.length; i++) {
-    const row = data[i];
-    const col0 = String(row[0]||'').trim();
-    const col1 = String(row[1]||'').trim();
-    const col4 = String(row[4]||'').trim();
-    const col5 = String(row[5]||'').trim();
-
-    // Stop at total row
-    if (col0.toLowerCase().includes('total de') || col0.toLowerCase().includes('otros conceptos')) break;
-    if (!col0 && !col1) continue;
-
-    if (col0.match(/\d{2}\/\d{2}\/\d{4}/)) lastFecha = col0;
-    if (!col1) continue;
-
-    const montoPesos = parseFloat(col4.replace(/\$/g,'').replace(/\./g,'').replace(',','.')) || 0;
-    const montoUSD = parseFloat(col5.replace(/U\$S/g,'').replace(/\$/g,'').trim()) || 0;
-
-    // Convert date dd/mm/yyyy -> yyyy-mm-dd
-    let fechaISO = lastFecha || '';
-    if (fechaISO.match(/\d{2}\/\d{2}\/\d{4}/)) {
-      const [d,m,y] = fechaISO.split('/');
-      fechaISO = `${y}-${m}-${d}`;
-    }
-
-    txs.push({
-      id: 'tx_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
-      fecha: fechaISO,
-      descripcion: col1,
-      cuotas: String(row[2]||'').trim(),
-      monto_pesos: montoPesos,
-      monto_usd: montoUSD,
-      tarjeta: cardName,
-      categoria: autoCategorize(col1),
-      recurrente: 0
-    });
-  }
-  return txs;
-}
-
-async function showAILoading(cardName, transactions) {
-  // Show inline loading in the upload zone
-  const zoneId = cardName === 'Visa 9580' ? 'drop-visa' : 'drop-amex';
-  const zone = document.getElementById(zoneId);
-  zone.innerHTML = `<div class="ai-loading"><div class="ai-spinner"></div><div class="ai-text">Analizando ${transactions.length} transacciones con IA...</div></div>`;
-
-  let finalTxs = transactions;
-
-  if (state.apiKey) {
-    try {
-      finalTxs = await categorizeWithAI(transactions, state.apiKey);
-    } catch(e) {
-      toast('IA no disponible, usando categorización automática');
-    }
-  }
-
+function aplicarImportacion(cardName, finalTxs) {
   // Mes principal del resumen = el mes con más movimientos (el período que se está liquidando).
   // Solo ese mes se reemplaza; las cuotas viejas de otros meses se agregan sin pisar el historial.
   const conteo = {};
   finalTxs.forEach(t => { const m = txMonth(t); if (m) conteo[m] = (conteo[m]||0) + 1; });
   const mesPrincipal = Object.keys(conteo).sort((a,b) => conteo[b]-conteo[a] || b.localeCompare(a))[0] || '';
 
-  state.transactions = state.transactions.filter(t => !(t.tarjeta === cardName && txMonth(t) === mesPrincipal) || t.id.startsWith('default_'));
+  // El PDF es la fuente de verdad de ese mes: se van también las filas viejas precargadas
+  const antes = state.transactions.length;
+  state.transactions = state.transactions.filter(t => !(t.tarjeta === cardName && txMonth(t) === mesPrincipal));
+  const reemplazadas = antes - state.transactions.length;
 
   // De los meses anteriores solo entran las filas que todavía no existen
-  const clave = t => [t.tarjeta, t.fecha, (t.descripcion||'').toLowerCase().trim(), t.monto_pesos, t.monto_usd].join('|');
+  const clave = t => [t.tarjeta, t.fecha, (t.descripcion||'').toLowerCase().trim(), Math.round(t.monto_pesos||0), Math.round((t.monto_usd||0)*100)].join('|');
   const nroCuota = c => { const m = String(c||'').match(/(\d+)\s*de\s*(\d+)/); return m ? parseInt(m[1]) : 0; };
   const existentes = new Map(state.transactions.map(t => [clave(t), t]));
   const aAgregar = finalTxs.filter(t => {
@@ -1689,28 +1658,18 @@ async function showAILoading(cardName, transactions) {
     if (nroCuota(t.cuotas) > nroCuota(ya.cuotas)) ya.cuotas = t.cuotas;
     return false;
   });
-  const omitidas = finalTxs.length - aAgregar.length;
 
-  // Add new transactions
   state.transactions.push(...aAgregar);
   saveState();
 
-  // Update summary card
-  const total = aAgregar.reduce((s,t)=>s+(t.monto_pesos||0),0);
-  const totalUsd = aAgregar.reduce((s,t)=>s+(t.monto_usd||0),0);
-  const summaryId = cardName === 'Visa 9580' ? 'visa' : 'amex';
-  document.getElementById(summaryId+'-total').textContent = fmt(total) + (totalUsd>0 ? ' + '+fmtUSD(totalUsd) : '');
-  document.getElementById(summaryId+'-cierre').textContent = `${aAgregar.length} transacciones importadas` + (mesPrincipal ? ` · período ${mkLabel(mesPrincipal)}` : '') + (omitidas ? ` · ${omitidas} ya estaban cargadas` : '');
-  document.getElementById(summaryId+'-summary').style.display = 'block';
-
-  // Restore upload zone
-  zone.innerHTML = `<input type="file" id="file-${summaryId}" accept=".xlsx,.xls,.pdf" onchange="handleUpload(event,'${cardName}')"><div class="upload-icon">✅</div><div class="upload-title">Resumen importado</div><div class="upload-sub">Hacé click para reemplazar</div>`;
-  zone.querySelector('input').onchange = (e) => handleUpload(e, cardName);
-
-  populateCatFilters();
-  renderTxTable();
-  try { renderDashboard(); } catch(e) {}
-  toast(`✅ ${aAgregar.length} transacciones importadas de ${cardName}`);
+  return {
+    periodo: mesPrincipal,
+    agregadas: aAgregar.length,
+    omitidas: finalTxs.length - aAgregar.length,
+    reemplazadas,
+    totalPesos: aAgregar.reduce((s,t)=>s+(t.monto_pesos||0),0),
+    totalUsd: aAgregar.reduce((s,t)=>s+(t.monto_usd||0),0)
+  };
 }
 
 async function categorizeWithAI(transactions, apiKey) {
