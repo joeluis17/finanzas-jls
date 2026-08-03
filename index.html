@@ -1616,8 +1616,11 @@ async function parseCardPdf(arrayBuffer) {
     filas = filas.concat(parsePdfPageRows(pdfRowsFromItems(content.items), ctx));
   }
 
-  // La tarjeta sale del propio PDF
-  const cardName = /AMERICAN EXPRESS/i.test(texto) ? 'Amex 2132' : (/VISA/i.test(texto) ? 'Visa 9580' : null);
+  // La tarjeta sale del propio PDF. Normalizamos espacios: según la versión de pdf.js
+  // los items pueden venir con espacios de más ("AMERICAN " + "EXPRESS").
+  const textoNorm = texto.replace(/\s+/g,' ').trim();
+  const cardName = /american\s*express|\bamex\b/i.test(textoNorm) ? 'Amex 2132'
+                 : (/\bvisa\b/i.test(textoNorm) ? 'Visa 9580' : null);
   if (!cardName) throw new Error('No pude identificar si es un resumen de Visa o de Amex');
 
   const txs = filas.map(f => ({
